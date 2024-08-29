@@ -1,0 +1,238 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split, GridSearchCV
+import numpy as np
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, r2_score, mean_squared_error, mean_absolute_error
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.svm import SVC, SVR
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
+from joblib import Parallel, delayed
+from tqdm import tqdm
+from sklearn.preprocessing import LabelEncoder
+
+def train_and_evaluate(data, target_column, test_size=0.25, models=None, problem_type='classification', hyperparameter_tuning=False, hyperparameter_tuning_threshold=0.5, n_jobs=-1, models_not_needed=None):
+    r"""
+    This function is made to make a Machine learning models based on the
+    problem type (classification, regression). By trying a set of models 
+    based on the problem type and the function will evaluate the models and
+    return the best one.
+    
+    The Function will also allow to apply hyperparameter tuning on the models. As applying 
+    a number of models and applying hyperparameter tuning on the data will take a lot of time the hyperparameter tuning will be optional for the user.
+    
+    Parameters:
+    
+    data:
+    the function will take a data frame make sure the data frame is cleaned 
+    and contains no null and only contains int and float types
+    
+    target_column: 
+    Takes a name of the target feature as a string.
+    
+    test_size: 
+    The size of the test sample.
+    
+    models: 
+    Takes a list of model names (as list strings) the user wants to try. the user can enter nothing in this parameter 
+    and the function will apply all the suitable models for the problem type.
+    [
+    'LogisticRegression','RandomForestClassifier',
+    'SVC','DecisionTreeClassifier', 'GaussianNB',
+    'KNeighborsClassifier' ,'KNeighborsRegressor',
+    'LinearRegression','DecisionTreeRegressor',
+    'SVR','RandomForestRegressor'
+    ]
+    
+    problem_type:
+    Task the type of problem  (classification, regression). 
+    the default = 'classification'
+    
+    hyperparameter_tuning: 
+    this parameter will allow the user to choose if the function will apply 
+    hyperparameter tuning on the models 
+    
+    hyperparameter_tuning_threshold:
+    If the user wants to apply hyperparameter tuning to the model.
+    A choice will be given to only apply the hyperparameter_tuning on the model 
+    with a less performance than the given value. in case of classification 
+    the threshold is the accuracy, and in case of regression the metric is
+    R2_score.
+    
+    n_jobs: 
+    The number of jobs to run in parallel (default: -1, which uses all available cores).
+    
+    models_not_needed:
+    in case some models are not needed it could be given to the function as a list.
+    """
+    
+    if models_not_needed is None:
+        models_not_needed = []
+    
+    model_dict = {
+        'LogisticRegression': LogisticRegression,
+        'RandomForestClassifier': RandomForestClassifier,
+        'SVC': SVC,
+        'DecisionTreeClassifier': DecisionTreeClassifier,
+        'GaussianNB': GaussianNB,
+        'KNeighborsClassifier': KNeighborsClassifier,
+        'LinearRegression': LinearRegression,
+        'RandomForestRegressor': RandomForestRegressor,
+        'SVR': SVR,
+        'DecisionTreeRegressor': DecisionTreeRegressor,
+        'KNeighborsRegressor': KNeighborsRegressor
+    }
+    
+    X = data.drop(columns=[target_column])
+    y = data[target_column]
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+    
+    if problem_type == 'classification':
+        default_models = [
+            'LogisticRegression', 
+            'RandomForestClassifier', 
+            'SVC', 
+            'DecisionTreeClassifier', 
+            'GaussianNB', 
+            'KNeighborsClassifier'
+        ]
+    elif problem_type == 'regression':
+        default_models = [
+            'LinearRegression', 
+            'RandomForestRegressor', 
+            'SVR', 
+            'DecisionTreeRegressor', 
+            'KNeighborsRegressor'
+        ]
+    else:
+        raise ValueError("Unsupported problem type. Choose 'classification' or 'regression'.")
+    
+    if models is None:
+        models = default_models
+    else:
+        models = set(models)
+    
+    models = set(models) - set(models_not_needed)
+    
+    if not models:
+        raise ValueError("No models to evaluate after filtering with models_not_needed.")
+    
+    models = [model_dict[model]() for model in models]
+    
+    def evaluate_model(model):
+        model_name = type(model).__name__
+        model.fit(X_train, y_train)
+        
+        if problem_type == 'classification':
+            y_pred = model.predict(X_test)
+            score = accuracy_score(y_test, y_pred)
+        elif problem_type == 'regression':
+            y_pred = model.predict(X_test)
+            score = r2_score(y_test, y_pred)
+        
+        best_model = model
+        best_score = score
+        best_params = model.get_params()  # Initialize with the default parameters
+        
+        if hyperparameter_tuning and score < hyperparameter_tuning_threshold:
+            param_grid = {}
+            if isinstance(model, LogisticRegression):
+                param_grid = {
+                    'C': [0.01, 0.1, 1, 10, 100],
+                    'penalty': ['l1', 'l2', 'elasticnet', 'none'],
+                    'solver': ['liblinear', 'saga']
+                }
+            elif isinstance(model, LinearRegression):
+                param_grid = {
+                    'fit_intercept': [True, False],
+                }
+            elif isinstance(model, RandomForestClassifier):
+                param_grid = {
+                    'n_estimators': [10, 50, 100, 200],
+                    'max_features': [1.0, 'sqrt', 'log2'],
+                    'max_depth': [None, 10, 20, 30, 40, 50],
+                    'min_samples_split': [2, 5, 10],
+                    'min_samples_leaf': [1, 2, 4]
+                }
+            elif isinstance(model, RandomForestRegressor):
+                param_grid = {
+                    'n_estimators': [10, 50, 100, 200],
+                    'max_features': [1.0, 'sqrt', 'log2'],
+                    'max_depth': [None, 10, 20, 30, 40, 50],
+                    'min_samples_split': [2, 5, 10],
+                    'min_samples_leaf': [1, 2, 4]
+                }
+            elif isinstance(model, SVC):
+                param_grid = {
+                    'C': [0.001, 0.01, 0.1, 1, 10, 100],
+                    'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
+                    'gamma': ['scale', 'auto'],
+                    'degree': [3, 4, 5]
+                }
+            elif isinstance(model, SVR):
+                param_grid = {
+                    'C': [0.001, 0.01, 0.1, 1, 10, 100],
+                    'kernel': ['linear', 'poly', 'rbf', 'sigmoid'],
+                    'gamma': ['scale', 'auto'],
+                    'degree': [3, 4, 5]
+                }
+            elif isinstance(model, KNeighborsClassifier):
+                param_grid = {
+                    'n_neighbors': [3, 5, 7, 9, 11],
+                    'weights': ['uniform', 'distance'],
+                    'algorithm': ['auto', 'ball_tree', 'kd_tree', 'brute']
+                }
+            elif isinstance(model, KNeighborsRegressor):
+                param_grid = {
+                    'n_neighbors': [3, 5, 7, 9, 11],
+                    'weights': ['uniform', 'distance'],
+                    'algorithm': ['ball_tree', 'kd_tree', 'brute']
+                }
+            elif isinstance(model, DecisionTreeClassifier):
+                param_grid = {
+                    'max_depth': [None, 10, 20, 30, 40, 50],
+                    'min_samples_split': [2, 5, 10],
+                    'min_samples_leaf': [1, 2, 4],
+                    'max_features': [None, 1.0, 'sqrt', 'log2']
+                }
+            elif isinstance(model, DecisionTreeRegressor):
+                param_grid = {
+                    'max_depth': [None, 10, 20, 30, 40, 50],
+                    'min_samples_split': [2, 5, 10],
+                    'min_samples_leaf': [1, 2, 4],
+                    'max_features': [None, 1.0, 'sqrt', 'log2']
+                }
+            else:
+                raise ValueError("Model type not supported.")
+            
+            if param_grid:
+                grid_search = GridSearchCV(model, param_grid, cv=5, n_jobs=n_jobs)
+                grid_search.fit(X_train, y_train)
+                
+                tuned_model = grid_search.best_estimator_
+                tuned_model.fit(X_train, y_train)
+                
+                if problem_type == 'classification':
+                    y_pred = tuned_model.predict(X_test)
+                    tuned_score = accuracy_score(y_test, y_pred)
+                elif problem_type == 'regression':
+                    y_pred = tuned_model.predict(X_test)
+                    tuned_score = r2_score(y_test, y_pred)
+                
+                if tuned_score > best_score:
+                    best_model = tuned_model
+                    best_score = tuned_score
+                    best_params = grid_search.best_params_
+        
+        return best_model, best_score, best_params
+    
+    results = Parallel(n_jobs=n_jobs)(delayed(evaluate_model)(model) for model in tqdm(models, desc="Model Evaluation"))
+    
+    if not results:
+        raise ValueError("No models were evaluated.")
+    
+    best_model, best_score, best_params = max(results, key=lambda x: x[1])
+    
+    return best_model, best_score, best_params
